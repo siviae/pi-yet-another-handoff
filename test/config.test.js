@@ -33,6 +33,29 @@ test('trusted project config overlays global; untrusted config not read; malform
   assert.equal(loadConfig(ctx(false)).autoHandoffAt, 90);
 });
 
+test('global config resolves from the Pi agent directory unless explicitly overridden', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'handoff-agent-config-'));
+  const keys = ['PI_CODING_AGENT_DIR', 'PI_HANDOFF_CONFIG'];
+  const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  t.after(async () => {
+    for (const key of keys) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+    await rm(dir, { recursive: true, force: true });
+  });
+  process.env.PI_CODING_AGENT_DIR = join(dir, 'agent');
+  delete process.env.PI_HANDOFF_CONFIG;
+  await mkdir(process.env.PI_CODING_AGENT_DIR);
+  await writeFile(join(dir, 'handoff.json'), JSON.stringify({ autoHandoffAt: 40 }));
+  await writeFile(join(dir, 'agent/handoff.json'), JSON.stringify({ autoHandoffAt: 90 }));
+  const ctx = { cwd: dir, isProjectTrusted: () => false };
+  assert.equal(loadConfig(ctx).autoHandoffAt, 90);
+  process.env.PI_HANDOFF_CONFIG = join(dir, 'override.json');
+  await writeFile(process.env.PI_HANDOFF_CONFIG, JSON.stringify({ autoHandoffAt: 75 }));
+  assert.equal(loadConfig(ctx).autoHandoffAt, 75);
+});
+
 test('decision requires completed non-terminating tool turn with known usage', () => {
   const event = { outcome: 'completed', message: { role: 'assistant', stopReason: 'toolUse', content: [{ type: 'toolCall' }] }, toolResults: [{}] };
   const config = validateConfig({ autoHandoffAt: 90 });

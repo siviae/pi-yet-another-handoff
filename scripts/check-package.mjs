@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 // All CLI invocations use isolated settings/auth locations; no model requests.
 const root = await mkdtemp(join(tmpdir(), 'handoff-package-'));
 const run = (cmd, args, cwd, extra = {}) => execFileSync(cmd, args, { cwd, encoding: 'utf8', timeout: 120000,
-  env: { ...process.env, PI_CODING_AGENT_DIR: join(root, 'agent'), PI_HANDOFF_CONFIG: join(root, 'handoff.json'), PI_OFFLINE: '1', ...extra } });
+  env: { ...process.env, PI_CODING_AGENT_DIR: join(root, 'agent'), PI_HANDOFF_CONFIG: '', PI_OFFLINE: '1', ...extra } });
 try {
   const [pack] = JSON.parse(run('npm', ['pack', '--json', '--pack-destination', root], resolve('.')));
   assert.deepEqual(pack.files.map(f => f.path).sort(), ['LICENSE', 'README.md', 'handoff-document.md', 'package.json', 'src/config.js', 'src/extension.js', 'src/handoff.js'].sort());
@@ -19,14 +19,16 @@ try {
   for (const f of pack.files) assert.doesNotMatch(await readFile(join(pkg, f.path), 'utf8'), /\p{Script=Han}/u, `${f.path}: Chinese characters`);
   await mkdir(project); await mkdir(join(root, 'agent'));
   await writeFile(join(root, 'agent/settings.json'), JSON.stringify({ cacheWarming: 'off', enableInstallTelemetry: false, enableAnalytics: false }));
-  await writeFile(join(root, 'handoff.json'), JSON.stringify({ autoHandoffAt: 90 }));
+  await writeFile(join(root, 'agent/handoff.json'), JSON.stringify({ autoHandoffAt: 90 }));
   run('npm', ['install', '--omit=dev', '--legacy-peer-deps', '--ignore-scripts', '--no-audit', '--no-fund'], pkg);
   await assert.rejects(lstat(join(pkg, 'node_modules/@earendil-works/pi-coding-agent')), { code: 'ENOENT' });
   const probe = join(root, 'probe.js');
   await writeFile(probe, `import assert from 'node:assert/strict'; import { writeFileSync } from 'node:fs';
 export default pi => { pi.registerCommand('package-check', {description:'Offline package probe', handler: async () => {
-const names=pi.getCommands().map(c=>c.name).filter(n=>n==='handoff'||n==='handoff-status'||n==='yet-another-handoff-auto').sort();
-assert.deepEqual(names,process.env.EXPECT_DISABLED?[]:['handoff','handoff-status','yet-another-handoff-auto']);
+const commands=pi.getCommands().map(c=>c.name);
+assert.equal(commands.includes('handoff-status'),false);
+const names=commands.filter(n=>n==='handoff'||n==='yet-another-handoff-auto').sort();
+assert.deepEqual(names,process.env.EXPECT_DISABLED?[]:['handoff','yet-another-handoff-auto']);
 writeFileSync(process.env.PROBE_MARKER, JSON.stringify(names));
 }}); };`);
   console.log(run('pi', ['install', '--local', '--approve', pkg], project));
@@ -35,7 +37,7 @@ writeFileSync(process.env.PROBE_MARKER, JSON.stringify(names));
     await rm(marker, { force: true });
     const output = run('pi', ['--offline', '--approve', '--no-mcp', '--no-skills', '--no-context-files', '-e', probe,
       '--model', 'openai/gpt-5.4-mini', '--no-session', '--print', '/package-check'], project, { ...extra, PROBE_MARKER: marker });
-    assert.equal(JSON.parse(await readFile(marker, 'utf8')).length, extra.EXPECT_DISABLED ? 0 : 3);
+    assert.equal(JSON.parse(await readFile(marker, 'utf8')).length, extra.EXPECT_DISABLED ? 0 : 2);
     assert.doesNotMatch(output, /Failed to load|duplicate command/i);
   };
   await invoke({});

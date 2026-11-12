@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { getAgentDir } from '@earendil-works/pi-coding-agent';
 import { join } from 'node:path';
 
 export const DEFAULTS = Object.freeze({
@@ -31,7 +31,7 @@ function readConfig(path) {
 }
 
 export function loadConfig(ctx, projectDirName = '.pi') {
-  const global = readConfig(process.env.PI_HANDOFF_CONFIG || join(homedir(), '.pi', 'handoff.json'));
+  const global = readConfig(process.env.PI_HANDOFF_CONFIG || join(getAgentDir(), 'handoff.json'));
   // Validate each file so a project override cannot hide a broken global config.
   validateConfig(global);
   const local = ctx.isProjectTrusted() ? readConfig(join(ctx.cwd, projectDirName, 'handoff.json')) : {};

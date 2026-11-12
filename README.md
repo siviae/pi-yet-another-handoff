@@ -51,11 +51,11 @@ npm run test:package
 
 git add .
 git commit -m "Initial confirmation-free automatic handoff"
-git tag v0.1.0
+git tag v0.1.1
 
 # Remove the old command registration to avoid /handoff:1 and /handoff:2.
 pi remove 'npm:@jackice/pi-handoff'
-pi install 'npm:pi-yet-another-handoff@git+file:///Users/iisaev/IdeaProjects/pi-yet-another-handoff#v0.1.0'
+pi install 'npm:pi-yet-another-handoff@git+file:///Users/iisaev/IdeaProjects/pi-yet-another-handoff#v0.1.1'
 ```
 
 Then `/reload` or restart Pi. This is an npm install from a local Git ref, not a
@@ -75,10 +75,12 @@ Do not load both this trial and an installed copy simultaneously.
 
 ## Configuration
 
-Global configuration: **`~/.pi/handoff.json`**, the same location as the original
-extension. Optional `PI_HANDOFF_CONFIG` replaces the global config path (useful
-for isolated testing). A trusted project's **`.pi/handoff.json`** overlays global
-values. Untrusted project configuration is not read.
+Global configuration: **`<agent-dir>/handoff.json`**, normally
+**`~/.pi/agent/handoff.json`**. The agent directory is resolved with Pi's
+`getAgentDir()` API and respects `PI_CODING_AGENT_DIR`. Optional
+`PI_HANDOFF_CONFIG` replaces the global config path (useful for isolated testing).
+A trusted project's **`.pi/handoff.json`** overlays global values. Untrusted
+project configuration is not read. The old `~/.pi/handoff.json` path is not read.
 
 Enable automatic handoff:
 
@@ -109,9 +111,9 @@ All defaults:
 - `timeoutMs`: positive end-to-end generation deadline. A timeout cancels waiting
   even if a provider ignores cancellation; cooperative providers also stop work.
 
-Reload after changing automatic settings. Commands reread configuration on use;
-`/handoff-status` also refreshes it. Malformed JSON / invalid values are reported,
-not silently interpreted as enabled. Unknown legacy keys are ignored.
+Reload after changing automatic settings. `/handoff` rereads configuration on use.
+Malformed JSON / invalid values are reported, not silently interpreted as enabled.
+Unknown legacy keys are ignored.
 
 ## Automatic handoff lifecycle and safety
 
@@ -196,7 +198,8 @@ not the model's intrinsic generation speed.
 
 ### Inspect actual timings
 
-Run **`/handoff-status`** after a handoff. Its `latest` record contains:
+Timing data is stored in session JSONL files, without a diagnostic slash command.
+Each `pi-yet-another-handoff.metrics` custom entry contains:
 
 - `elapsedMs`: total streamed model-call time (not session reload/continuation);
 - `firstEventMs`: time until the first normalized stream event;

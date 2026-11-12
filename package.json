@@ -1,6 +1,6 @@
 {
   "name": "pi-yet-another-handoff",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Confirmation-free Pi session handoff with automatic context-threshold continuation",
   "type": "module",
   "license": "MIT",

@@ -120,18 +120,6 @@ export function createHandoffExtension({ readConfig = ctx => loadConfig(ctx, CON
       description: 'Generate handoff, open a new session and continue immediately (no confirmation)',
       handler: async (args, ctx) => { pending = undefined; await handoff(args.trim() || undefined, ctx); },
     });
-    pi.registerCommand('handoff-status', {
-      description: 'Show handoff settings, context usage and latest generation timings/token usage',
-      handler: async (_args, ctx) => {
-        configure(ctx);
-        const latest = ctx.sessionManager.getBranch().findLast(e => e.type === 'custom' && e.customType === METRICS)?.data;
-        const text = JSON.stringify({ autoHandoffAt: config?.autoHandoffAt, reasoning: config?.reasoning,
-          maxTokens: config?.maxTokens, timeoutMs: config?.timeoutMs, autoPaused: autoFailed,
-          context: ctx.getContextUsage(), latest }, null, 2);
-        if (ctx.hasUI) ctx.ui.notify(text, 'info');
-        else console.log(text);
-      },
-    });
     pi.registerCommand(AUTO_COMMAND, {
       description: 'Internal automatic handoff continuation',
       handler: async (_args, ctx) => {
