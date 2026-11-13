@@ -1,21 +1,15 @@
-import { BorderedLoader, CONFIG_DIR_NAME } from '@earendil-works/pi-coding-agent';
-import { loadConfig, shouldAutoHandoff } from './config.js';
+import { CONFIG_DIR_NAME, DynamicBorder } from '@earendil-works/pi-coding-agent';
+import { CancellableLoader, Container } from '@earendil-works/pi-tui';
+import { loadConfig } from './config.js';
 import { generateDocument, saveDocument, wrapHandoffContext } from './handoff.js';
 
-const AUTO_COMMAND = 'yet-another-handoff-auto';
 const METRICS = 'pi-yet-another-handoff.metrics';
 const KICKOFF = 'Continue the unfinished work from the handoff context now. Follow the recorded constraints and next steps. Do not ask for confirmation of this handoff. If the task is complete or blocked on user input, report that and stop.';
 
 // Injection points are for offline tests; the installed entrypoint uses the real host API.
 export function createHandoffExtension({ readConfig = ctx => loadConfig(ctx, CONFIG_DIR_NAME), generate = generateDocument, save = saveDocument } = {}) {
   return function handoffExtension(pi) {
-    let config, pending, running = false, disposed = false, autoFailed = false, ongoing = false, controller;
-    const terminatingCalls = new Set();
-    pi.on('turn_start', () => { terminatingCalls.clear(); });
-    pi.on('tool_execution_end', event => {
-      // terminate is execution metadata, not persisted in ToolResultMessage.
-      if (!event.parentToolCallId && event.result.terminate === true) terminatingCalls.add(event.toolCallId);
-    });
+    let config, running = false, disposed = false, controller;
     const notify = (ctx, text, level = 'info') => {
       if (disposed) return;
       if (ctx.hasUI) ctx.ui.notify(text, level);
@@ -28,11 +22,10 @@ export function createHandoffExtension({ readConfig = ctx => loadConfig(ctx, CON
     pi.on('session_start', (_event, ctx) => { configure(ctx); });
     pi.on('session_shutdown', () => {
       disposed = true;
-      pending = undefined;
       controller?.abort(new Error('Session closed during handoff'));
     });
 
-    async function handoff(goal, ctx, automatic = false) {
+    async function handoff(goal, ctx) {
       if (running || disposed) return;
       if (!configure(ctx)) return;
       running = true;
@@ -47,30 +40,47 @@ export function createHandoffExtension({ readConfig = ctx => loadConfig(ctx, CON
         const leafId = ctx.sessionManager.getLeafId();
         const started = performance.now();
         let progress = { phase: 'waiting', chars: 0 };
-        const renderProgress = () => {
-          if (!disposed && ctx.hasUI) ctx.ui.setStatus('handoff', `Handoff: ${Math.round((performance.now() - started) / 1000)}s, ${progress.phase}, ${progress.chars} chars`);
-        };
-        renderProgress();
-        timer = setInterval(renderProgress, 1000);
+        let renderProgress = () => {};
+        const progressMessage = () => `Generating handoff: ${Math.round((performance.now() - started) / 1000)}s, ${progress.phase}, ${progress.chars} chars (Escape to cancel)`;
         const run = async extraSignal => {
-          const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(config.timeoutMs), ...(extraSignal ? [extraSignal] : [])]);
+          const timeout = new AbortController();
+          const signal = AbortSignal.any([controller.signal, timeout.signal, ...(extraSignal ? [extraSignal] : [])]);
           signal.throwIfAborted();
+          const deadline = setTimeout(() => timeout.abort(new Error('Handoff generation timed out')), config.timeoutMs);
           let onAbort;
           const cancelled = new Promise((_resolve, reject) => {
             onAbort = () => reject(signal.reason || new Error('Handoff cancelled'));
             signal.addEventListener('abort', onAbort, { once: true });
           });
           try {
-            return await Promise.race([generate(ctx, goal, config, signal, update => { progress = update; }), cancelled]);
-          } finally { signal.removeEventListener('abort', onAbort); }
+            return await Promise.race([generate(ctx, goal, config, signal, update => { progress = update; renderProgress(); }), cancelled]);
+          } finally {
+            clearTimeout(deadline);
+            signal.removeEventListener('abort', onAbort);
+          }
         };
         let result;
         if (ctx.mode === 'tui') {
           // No editor/confirmation. Escape only cancels the operation.
           const outcome = await ctx.ui.custom((tui, theme, _kb, done) => {
-            const loader = new BorderedLoader(tui, theme, 'Generating handoff (Escape to cancel)...');
+            const loader = new CancellableLoader(tui, s => theme.fg('accent', s), s => theme.fg('muted', s), progressMessage());
+            const panel = new Container();
+            panel.addChild(new DynamicBorder(s => theme.fg('border', s)));
+            panel.addChild(loader);
+            panel.addChild(new DynamicBorder(s => theme.fg('border', s)));
+            renderProgress = () => { if (!disposed) loader.setMessage(progressMessage()); };
+            timer = setInterval(renderProgress, 1000);
             run(loader.signal).then(value => done({ value }), error => done({ error }));
-            return loader;
+            return {
+              render: width => panel.render(width),
+              invalidate: () => panel.invalidate(),
+              handleInput: data => loader.handleInput(data),
+              dispose: () => {
+                clearInterval(timer);
+                renderProgress = () => {};
+                loader.dispose();
+              },
+            };
           });
           if (!outcome) throw new Error('Handoff cancelled');
           if (outcome.error) throw outcome.error;
@@ -85,10 +95,9 @@ export function createHandoffExtension({ readConfig = ctx => loadConfig(ctx, CON
           throw new Error('Session changed during handoff; original session retained');
         }
         const path = save(parentSession, document);
-        const record = { ...metrics, automatic, path, parentSession };
+        const record = { ...metrics, path, parentSession };
         pi.appendEntry(METRICS, record);
         clearInterval(timer);
-        if (ctx.hasUI) ctx.ui.setStatus('handoff', undefined);
         const switched = await ctx.newSession({
           parentSession,
           setup: async sm => {
@@ -104,13 +113,11 @@ export function createHandoffExtension({ readConfig = ctx => loadConfig(ctx, CON
         });
         if (switched.cancelled) throw new Error(`New session cancelled; handoff retained${path ? ` at ${path}` : ''}`);
       } catch (error) {
-        if (automatic) autoFailed = true;
-        const message = `Handoff stopped: ${error.message || String(error)}${automatic ? '. Auto handoff paused until /reload or a new session; use /handoff to retry.' : ''}`;
+        const message = `Handoff stopped: ${error.message || String(error)}`;
         if (disposed) console.error(message); // Replacement failures cannot use the stale UI context.
         else notify(ctx, message, 'error');
       } finally {
         clearInterval(timer);
-        if (!disposed && ctx.hasUI) ctx.ui.setStatus('handoff', undefined);
         running = false;
         controller = undefined;
       }
@@ -118,43 +125,7 @@ export function createHandoffExtension({ readConfig = ctx => loadConfig(ctx, CON
 
     pi.registerCommand('handoff', {
       description: 'Generate handoff, open a new session and continue immediately (no confirmation)',
-      handler: async (args, ctx) => { pending = undefined; await handoff(args.trim() || undefined, ctx); },
-    });
-    pi.registerCommand(AUTO_COMMAND, {
-      description: 'Internal automatic handoff continuation',
-      handler: async (_args, ctx) => {
-        const request = pending;
-        pending = undefined;
-        if (!request || request.sessionId !== ctx.sessionManager.getSessionId()) return;
-        await handoff(undefined, ctx, true);
-      },
-    });
-    pi.on('session_before_compact', (event, ctx) => {
-      // Pi's token reserve can compact before our percentage is reached (e.g.
-      // at 87% of a 128K window). While tools are making progress, auto handoff
-      // replaces threshold compaction, but never manual/overflow recovery.
-      if (event.reason === 'threshold' && ongoing && config && config.autoHandoffAt !== false && !autoFailed && Number.isFinite(ctx.getContextUsage()?.percent)) {
-        return { cancel: true };
-      }
-    });
-    pi.on('turn_end', (event, ctx) => {
-      const boundary = { ...event, toolResults: event.toolResults.map(r => ({ ...r, terminate: terminatingCalls.has(r.toolCallId) })) };
-      ongoing = event.outcome === 'completed' && event.message?.content?.some(c => c.type === 'toolCall') &&
-        boundary.toolResults.length > 0 && !boundary.toolResults.every(r => r.terminate === true);
-      if (!config || running || pending || disposed || autoFailed || ctx.signal?.aborted || ctx.hasPendingMessages()) return;
-      if (!shouldAutoHandoff(boundary, ctx.getContextUsage(), config)) return;
-      pending = { sessionId: ctx.sessionManager.getSessionId() };
-      // Abort only AFTER the complete tool batch is persisted. This prevents the
-      // next provider request/threshold compaction. Do not await abort from a hook.
-      ctx.abort();
-    });
-    pi.on('agent_settled', (_event, ctx) => {
-      ongoing = false;
-      if (!pending || disposed) return;
-      if (ctx.hasPendingMessages()) { pending = undefined; return; }
-      // Commands have newSession; event contexts intentionally do not. The host
-      // defers this dispatch until all settled handlers have finished.
-      pi.sendUserMessage(`/${AUTO_COMMAND}`, { expandPromptTemplates: true });
+      handler: async (args, ctx) => { await handoff(args.trim() || undefined, ctx); },
     });
   };
 }

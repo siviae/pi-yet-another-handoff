@@ -3,17 +3,17 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadConfig, validateConfig, shouldAutoHandoff } from '../src/config.js';
+import { loadConfig, validateConfig } from '../src/config.js';
 import { renderHandoffPrompt, requestContext, saveDocument } from '../src/handoff.js';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
 
-test('config rejects invalid thresholds and bounds', () => {
-  for (const autoHandoffAt of [0, 100, -1, '90', true, null, NaN, Infinity]) assert.throws(() => validateConfig({ autoHandoffAt }));
+test('config validates template paths and generation bounds', () => {
+  for (const templateFile of ['', '  ', false, 123, {}]) assert.throws(() => validateConfig({ templateFile }));
   for (const maxTokens of [0, -1, 1.5, '8192']) assert.throws(() => validateConfig({ maxTokens }));
   assert.throws(() => validateConfig([]));
   assert.throws(() => validateConfig({ reasoning: 'fast' }));
-  assert.equal(validateConfig({ autoHandoffAt: 90 }).autoHandoffAt, 90);
-  assert.equal(validateConfig({}).autoHandoffAt, false);
+  assert.equal(validateConfig({}).templateFile, null);
+  assert.equal(validateConfig({ autoHandoffAt: 90 }).autoHandoffAt, undefined);
 });
 
 test('trusted project config overlays global; untrusted config not read; malformed JSON fails visibly', async t => {
@@ -21,16 +21,16 @@ test('trusted project config overlays global; untrusted config not read; malform
   const old = process.env.PI_HANDOFF_CONFIG;
   process.env.PI_HANDOFF_CONFIG = join(dir, 'global.json');
   t.after(async () => { if (old === undefined) delete process.env.PI_HANDOFF_CONFIG; else process.env.PI_HANDOFF_CONFIG = old; await rm(dir, { recursive: true, force: true }); });
-  await writeFile(process.env.PI_HANDOFF_CONFIG, JSON.stringify({ autoHandoffAt: 90, maxTokens: 4096 }));
+  await writeFile(process.env.PI_HANDOFF_CONFIG, JSON.stringify({ reasoning: 'high', maxTokens: 4096 }));
   await mkdir(join(dir, '.pi'));
-  await writeFile(join(dir, '.pi/handoff.json'), JSON.stringify({ autoHandoffAt: false }));
+  await writeFile(join(dir, '.pi/handoff.json'), JSON.stringify({ reasoning: 'off' }));
   const ctx = trusted => ({ cwd: dir, isProjectTrusted: () => trusted });
-  assert.equal(loadConfig(ctx(true)).autoHandoffAt, false);
+  assert.equal(loadConfig(ctx(true)).reasoning, 'off');
   assert.equal(loadConfig(ctx(true)).maxTokens, 4096);
-  assert.equal(loadConfig(ctx(false)).autoHandoffAt, 90);
+  assert.equal(loadConfig(ctx(false)).reasoning, 'high');
   await writeFile(join(dir, '.pi/handoff.json'), '{');
   assert.throws(() => loadConfig(ctx(true)), /Cannot read handoff config/);
-  assert.equal(loadConfig(ctx(false)).autoHandoffAt, 90);
+  assert.equal(loadConfig(ctx(false)).reasoning, 'high');
 });
 
 test('global config resolves from the Pi agent directory unless explicitly overridden', async t => {
@@ -47,22 +47,13 @@ test('global config resolves from the Pi agent directory unless explicitly overr
   process.env.PI_CODING_AGENT_DIR = join(dir, 'agent');
   delete process.env.PI_HANDOFF_CONFIG;
   await mkdir(process.env.PI_CODING_AGENT_DIR);
-  await writeFile(join(dir, 'handoff.json'), JSON.stringify({ autoHandoffAt: 40 }));
-  await writeFile(join(dir, 'agent/handoff.json'), JSON.stringify({ autoHandoffAt: 90 }));
+  await writeFile(join(dir, 'handoff.json'), JSON.stringify({ maxTokens: 40 }));
+  await writeFile(join(dir, 'agent/handoff.json'), JSON.stringify({ maxTokens: 90 }));
   const ctx = { cwd: dir, isProjectTrusted: () => false };
-  assert.equal(loadConfig(ctx).autoHandoffAt, 90);
+  assert.equal(loadConfig(ctx).maxTokens, 90);
   process.env.PI_HANDOFF_CONFIG = join(dir, 'override.json');
-  await writeFile(process.env.PI_HANDOFF_CONFIG, JSON.stringify({ autoHandoffAt: 75 }));
-  assert.equal(loadConfig(ctx).autoHandoffAt, 75);
-});
-
-test('decision requires completed non-terminating tool turn with known usage', () => {
-  const event = { outcome: 'completed', message: { role: 'assistant', stopReason: 'toolUse', content: [{ type: 'toolCall' }] }, toolResults: [{}] };
-  const config = validateConfig({ autoHandoffAt: 90 });
-  assert.equal(shouldAutoHandoff(event, { percent: 90 }, config), true);
-  for (const percent of [null, undefined, 89.99, NaN]) assert.equal(shouldAutoHandoff(event, { percent }, config), false);
-  assert.equal(shouldAutoHandoff({ ...event, outcome: 'aborted' }, { percent: 95 }, config), false);
-  assert.equal(shouldAutoHandoff({ ...event, toolResults: [{ terminate: true }] }, { percent: 95 }, config), false);
+  await writeFile(process.env.PI_HANDOFF_CONFIG, JSON.stringify({ maxTokens: 75 }));
+  assert.equal(loadConfig(ctx).maxTokens, 75);
 });
 
 test('template preserves original schema and literal focus strings', () => {

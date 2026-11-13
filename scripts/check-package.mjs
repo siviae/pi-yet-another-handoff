@@ -19,7 +19,7 @@ try {
   for (const f of pack.files) assert.doesNotMatch(await readFile(join(pkg, f.path), 'utf8'), /\p{Script=Han}/u, `${f.path}: Chinese characters`);
   await mkdir(project); await mkdir(join(root, 'agent'));
   await writeFile(join(root, 'agent/settings.json'), JSON.stringify({ cacheWarming: 'off', enableInstallTelemetry: false, enableAnalytics: false }));
-  await writeFile(join(root, 'agent/handoff.json'), JSON.stringify({ autoHandoffAt: 90 }));
+  await writeFile(join(root, 'agent/handoff.json'), JSON.stringify({ reasoning: 'low' }));
   run('npm', ['install', '--omit=dev', '--legacy-peer-deps', '--ignore-scripts', '--no-audit', '--no-fund'], pkg);
   await assert.rejects(lstat(join(pkg, 'node_modules/@earendil-works/pi-coding-agent')), { code: 'ENOENT' });
   const probe = join(root, 'probe.js');
@@ -28,7 +28,7 @@ export default pi => { pi.registerCommand('package-check', {description:'Offline
 const commands=pi.getCommands().map(c=>c.name);
 assert.equal(commands.includes('handoff-status'),false);
 const names=commands.filter(n=>n==='handoff'||n==='yet-another-handoff-auto').sort();
-assert.deepEqual(names,process.env.EXPECT_DISABLED?[]:['handoff','yet-another-handoff-auto']);
+assert.deepEqual(names,process.env.EXPECT_DISABLED?[]:['handoff']);
 writeFileSync(process.env.PROBE_MARKER, JSON.stringify(names));
 }}); };`);
   console.log(run('pi', ['install', '--local', '--approve', pkg], project));
@@ -37,7 +37,7 @@ writeFileSync(process.env.PROBE_MARKER, JSON.stringify(names));
     await rm(marker, { force: true });
     const output = run('pi', ['--offline', '--approve', '--no-mcp', '--no-skills', '--no-context-files', '-e', probe,
       '--model', 'openai/gpt-5.4-mini', '--no-session', '--print', '/package-check'], project, { ...extra, PROBE_MARKER: marker });
-    assert.equal(JSON.parse(await readFile(marker, 'utf8')).length, extra.EXPECT_DISABLED ? 0 : 2);
+    assert.equal(JSON.parse(await readFile(marker, 'utf8')).length, extra.EXPECT_DISABLED ? 0 : 1);
     assert.doesNotMatch(output, /Failed to load|duplicate command/i);
   };
   await invoke({});

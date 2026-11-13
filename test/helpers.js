@@ -8,7 +8,7 @@ import { validateConfig } from '../src/config.js';
 
 export const DOCUMENT = '## Goal\nFinish the task\n## Constraints & Preferences\nNone\n## Progress\n### Done\n- [x] Tool completed\n### In Progress\n- [ ] Finish\n### Pending\nNone\n## Key Decisions\nNone\n## Critical Context\nSECRET_STATE\n## Next Steps\n1. Finish\n';
 
-export async function harness(t, { handler, config = { autoHandoffAt: 90 }, generate, save, initial, extraFactories = [], compaction = { enabled: false }, terminate = false } = {}) {
+export async function harness(t, { handler, config = {}, generate, save, initial, extraFactories = [], compaction = { enabled: false }, terminate = false } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'handoff-test-'));
   await mkdir(join(root, 'agent'));
   const modelRuntime = await ModelRuntime.create({ authPath: join(root, 'auth.json'), modelsPath: null, refreshOnCreate: false });

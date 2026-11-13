@@ -4,9 +4,16 @@ import { convertToLlm } from '@earendil-works/pi-coding-agent';
 
 const template = readFileSync(new URL('../handoff-document.md', import.meta.url), 'utf8');
 
-export function renderHandoffPrompt(goal) {
-  return template.replace(/{{#if additionalFocus}}([\s\S]*?){{\/if}}/, (_, block) =>
-    goal ? block.replace('{{additionalFocus}}', () => goal) : '');
+export function renderHandoffPrompt(goal, templateFile = null) {
+  let source = template;
+  if (templateFile !== null) {
+    try { source = readFileSync(templateFile, 'utf8'); }
+    catch (error) { throw new Error(`Cannot read handoff template ${templateFile}: ${error.message}`); }
+    if (!source.trim()) throw new Error(`Handoff template is empty: ${templateFile}`);
+  }
+  return source
+    .replace(/{{#if additionalFocus}}([\s\S]*?){{\/if}}/g, (_, block) => goal ? block : '')
+    .replace(/{{additionalFocus}}/g, () => goal || '');
 }
 
 export function wrapHandoffContext(document) {
@@ -22,7 +29,7 @@ export function saveDocument(sessionFile, document) {
   return path;
 }
 
-export function requestContext(ctx, goal) {
+export function requestContext(ctx, goal, templateFile = null) {
   // Unlike the upstream branch walker, projection includes custom handoff messages,
   // tree summaries and context edits, and applies the latest compaction.
   const messages = convertToLlm(ctx.sessionManager.buildSessionProjection().messages);
@@ -31,19 +38,19 @@ export function requestContext(ctx, goal) {
     // Modern Pi stores system messages in the transcript. Prepending the replayed
     // prompt again would duplicate it and invalidate the shared cached prefix.
     systemPrompt: messages[0]?.role === 'system' ? undefined : (ctx.getSystemPrompt() || undefined),
-    messages: [...messages, { role: 'user', content: [{ type: 'text', text: renderHandoffPrompt(goal) }], timestamp: Date.now() }],
+    messages: [...messages, { role: 'user', content: [{ type: 'text', text: renderHandoffPrompt(goal, templateFile) }], timestamp: Date.now() }],
   };
 }
 
 export async function generateDocument(ctx, goal, config, signal, progress = () => {}) {
   if (!ctx.model) throw new Error('No model selected');
-  const context = requestContext(ctx, goal);
+  const context = requestContext(ctx, goal, config.templateFile);
   const usage = ctx.getContextUsage();
   // Leave room for the added template and provider framing on small windows.
   const overhead = Math.ceil(JSON.stringify(context.messages.at(-1)).length / 3) + 512;
   const available = usage?.tokens != null ? usage.contextWindow - usage.tokens - overhead : ctx.model.maxTokens;
   const maxTokens = Math.floor(Math.min(config.maxTokens, ctx.model.maxTokens, available));
-  if (maxTokens <= 0) throw new Error('Not enough context headroom to generate a handoff; compact or use an earlier threshold');
+  if (maxTokens <= 0) throw new Error('Not enough context headroom to generate a handoff; compact or run /handoff earlier');
   const started = performance.now();
   let firstEventMs, firstTextMs, chars = 0;
   const stream = ctx.modelRegistry.streamSimple(ctx.model, context, {

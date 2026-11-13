@@ -9,7 +9,7 @@ or confirmation step.
 Install from a GitHub release tag:
 
 ```bash
-pi install 'npm:pi-yet-another-handoff@git+https://github.com/siviae/pi-yet-another-handoff.git#v0.1.2'
+pi install 'npm:pi-yet-another-handoff@git+https://github.com/siviae/pi-yet-another-handoff.git#v0.1.3'
 ```
 
 Run `/reload` or restart Pi. Add `--local` to install for the current project
@@ -54,54 +54,97 @@ override the global configuration file path.
 A trusted project's **`.pi/handoff.json`** overrides global values. Configuration
 from untrusted projects is not read.
 
-To enable automatic handoff at 90% context usage:
-
-```json
-{
-  "autoHandoffAt": 90
-}
-```
-
 Available settings and their defaults:
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `autoHandoffAt` | `false` | Disable automatic handoff, or set a context percentage strictly between 0 and 100. |
+| `templateFile` | `null` | Path to a custom handoff prompt template. `null` uses the bundled `handoff-document.md`. |
 | `reasoning` | `"low"` | Reasoning effort for handoff generation, independent of the main session. Supports `"off"`; availability depends on the model. |
 | `maxTokens` | `8192` | Output-token limit, including reasoning where applicable. Also capped by the model and available context. |
 | `timeoutMs` | `180000` | Generation timeout in milliseconds. |
 
-Run `/reload` after changing automatic settings. Manual `/handoff` rereads
-configuration on use. Invalid JSON or values are reported.
+Configuration is reread on every `/handoff`. Invalid JSON or values are reported.
+The removed `autoHandoffAt` setting is ignored; it no longer triggers handoff.
 
-## Automatic handoff
+### Custom handoff template
 
-Automatic handoff runs when context usage reaches the configured threshold and
-the model is continuing tool-based work. It waits for the entire tool batch to
-finish; executing tools are not interrupted. A final response without tool calls,
-an error, a user abort, or unknown context usage does not trigger a handoff.
-Queued user messages take priority.
+Copy [handoff-document.md](handoff-document.md), edit it, and set its path in
+`handoff.json`:
 
-While tool work is ongoing, automatic handoff defers Pi's threshold-based
-compaction so the configured percentage can be reached. Manual `/compact` and
-context-overflow recovery remain available. There is no need to disable Pi's
-compaction globally.
+```json
+{
+  "templateFile": "./my-handoff.md"
+}
+```
+
+Relative paths resolve against the directory containing that configuration file,
+not the current working directory. Absolute paths are also supported. A trusted
+project can override the global template, or set `"templateFile": null` to restore
+the bundled default. The default template remains in the repository and package,
+unchanged.
+
+The file is the prompt used to generate the document, not the document itself.
+It is reread for each handoff. Missing, unreadable, or empty custom files stop
+handoff rather than silently falling back to the default.
+
+Templates support `{{additionalFocus}}` for the optional `/handoff <focus>`
+argument, and optional blocks:
+
+```text
+{{#if additionalFocus}}
+Additional focus: {{additionalFocus}}
+{{/if}}
+```
+
+Blocks are omitted when no focus is supplied. These are the only supported
+template constructs (not a general Handlebars engine). Custom templates can
+change the document structure; ask the model to output only the handoff document.
+
+## Optional automation (bring your own extension)
+
+This package deliberately does **not** trigger handoff automatically or change
+Pi's compaction behavior. A context percentage alone cannot tell whether the
+agent needs to finish additional work first: cleanup, verification, background
+jobs, or another critical step may still be pending. Use `/handoff` when it is
+safe to replace the session.
+
+If you need automation, implement it in a separate Pi extension:
+
+1. Observe `turn_end` and `ctx.getContextUsage()?.percent`. Treat a threshold
+   (for example, 90%) as a request to prepare for handoff, not proof it is safe.
+2. Define workflow-specific readiness checks. Finish any required extra work and
+   stop or persist background jobs. Do not switch while tools are executing,
+   user messages are queued, a run is aborted, or context usage is unknown.
+3. At a safe idle boundary, dispatch the public command:
+   `pi.sendUserMessage("/handoff", { expandPromptTemplates: true })`.
+   The flag is required for Pi to execute the slash command rather than send it
+   to the model as text. Event contexts do not expose `newSession`; reuse the
+   command instead of duplicating session-switch logic.
+4. Guard against repeated dispatch, clear pending requests on session changes,
+   and pause automation after failure until an explicit retry. If stopping an
+   active run, wait for its complete tool batch to persist before requesting
+   abort, then dispatch only after `agent_settled`.
+5. Leave enough headroom for document generation. Pi may compact before your
+   threshold; any custom compaction policy belongs in that separate extension,
+   not this package. Keep manual compaction and overflow recovery available.
+
+There is no generic readiness check provided by this package. The separate
+extension must decide whether unfinished work can safely move to a new session.
 
 If generation fails, times out, returns an empty or truncated document, or cannot
-save the artifact, the current session stays active. Further automatic attempts
-are paused until `/reload` or a new session; use `/handoff` to retry manually.
+save the artifact, the current session stays active. Use `/handoff` to retry.
 Other extensions can veto the session switch.
 
 ## Limitations
 
-- A large tool result can exceed the threshold or fill the context window before
-  handoff is possible. Use an earlier threshold for large or unpredictable outputs.
+- A large tool result can fill the context window before handoff is possible.
+  Run `/handoff` early enough to leave room for generation.
 - Handoff uses the full projected conversation, including tool results. Large
   contexts and long documents take time to summarize; generation speed depends
   on the model and provider.
 - This is a new session, not in-place compaction. Extension instances reload, and
-  private in-memory state and active background jobs are not migrated. Disable
-  automatic handoff if your workflow requires those jobs to survive.
+  private in-memory state and active background jobs are not migrated. Finish
+  or persist any work that must survive before running `/handoff`.
 
 ## Development
 
