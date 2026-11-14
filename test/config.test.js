@@ -13,6 +13,7 @@ test('config validates template paths and generation bounds', () => {
   assert.throws(() => validateConfig([]));
   assert.throws(() => validateConfig({ reasoning: 'fast' }));
   assert.equal(validateConfig({}).templateFile, null);
+  assert.equal(validateConfig({}).timeoutMs, 600000);
   assert.equal(validateConfig({ autoHandoffAt: 90 }).autoHandoffAt, undefined);
 });
 

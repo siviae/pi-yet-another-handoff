@@ -6,7 +6,7 @@ export const DEFAULTS = Object.freeze({
   templateFile: null,
   reasoning: 'low',
   maxTokens: 8192,
-  timeoutMs: 180000,
+  timeoutMs: 600000,
 });
 
 export function validateConfig(value) {
