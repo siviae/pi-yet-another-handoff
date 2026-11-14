@@ -9,7 +9,7 @@ or confirmation step.
 Install from a GitHub release tag:
 
 ```bash
-pi install 'npm:pi-yet-another-handoff@git+https://github.com/siviae/pi-yet-another-handoff.git#v0.1.3'
+pi install 'npm:pi-yet-another-handoff@git+https://github.com/siviae/pi-yet-another-handoff.git#v0.1.4'
 ```
 
 Run `/reload` or restart Pi. Add `--local` to install for the current project
@@ -37,6 +37,11 @@ immediately. The document appears as a visible message wrapped in
 - Critical Context
 - Next Steps
 
+The new session preserves the selected provider/model and thinking level before
+its first continuation request, rather than reverting to the configured defaults.
+The `reasoning` setting below applies only to generating the handoff document;
+it does not change the continuation's thinking level.
+
 The previous session remains on disk. Documents are saved to
 `<session-file-without-.jsonl>/handoff-<timestamp>.md` with private file permissions
 (`0600`). In-memory sessions have no saved artifact. Treat handoff documents as
@@ -61,7 +66,7 @@ Available settings and their defaults:
 | `templateFile` | `null` | Path to a custom handoff prompt template. `null` uses the bundled `handoff-document.md`. |
 | `reasoning` | `"low"` | Reasoning effort for handoff generation, independent of the main session. Supports `"off"`; availability depends on the model. |
 | `maxTokens` | `8192` | Output-token limit, including reasoning where applicable. Also capped by the model and available context. |
-| `timeoutMs` | `180000` | Generation timeout in milliseconds. |
+| `timeoutMs` | `600000` | Generation timeout in milliseconds (10 minutes). |
 
 Configuration is reread on every `/handoff`. Invalid JSON or values are reported.
 The removed `autoHandoffAt` setting is ignored; it no longer triggers handoff.

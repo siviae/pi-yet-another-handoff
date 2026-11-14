@@ -19,7 +19,21 @@ export function createHandoffExtension({ readConfig = ctx => loadConfig(ctx, CON
       try { config = readConfig(ctx); return true; }
       catch (error) { config = undefined; notify(ctx, error.message, 'error'); return false; }
     }
-    pi.on('session_start', (_event, ctx) => { configure(ctx); });
+    pi.on('session_start', async (event, ctx) => {
+      configure(ctx);
+      if (event.reason !== 'new') return;
+      const branch = ctx.sessionManager.getBranch();
+      if (!branch.some(entry => entry.type === 'custom_message' && entry.customType === 'handoff')) return;
+      // setup runs after runtime creation: history alone does not update the
+      // live agent. Restore through the fresh extension API before kickoff.
+      const selection = branch.findLast(entry => entry.type === 'model_change');
+      const thinking = branch.findLast(entry => entry.type === 'thinking_level_change');
+      if (selection) {
+        const model = ctx.modelRegistry.find(selection.provider, selection.modelId);
+        if (!model || !await pi.setModel(model)) throw new Error('Cannot restore handoff model');
+      }
+      if (thinking) pi.setThinkingLevel(thinking.thinkingLevel);
+    });
     pi.on('session_shutdown', () => {
       disposed = true;
       controller?.abort(new Error('Session closed during handoff'));
@@ -94,6 +108,10 @@ export function createHandoffExtension({ readConfig = ctx => loadConfig(ctx, CON
         if (sessionId !== ctx.sessionManager.getSessionId() || leafId !== ctx.sessionManager.getLeafId() || !ctx.isIdle() || ctx.hasPendingMessages()) {
           throw new Error('Session changed during handoff; original session retained');
         }
+        // Capture live session settings, not the defaults or summary-generation
+        // reasoning. Only plain data may cross runtime replacement.
+        const modelSelection = ctx.model && { provider: ctx.model.provider, id: ctx.model.id };
+        const thinkingLevel = ctx.thinkingLevel;
         const path = save(parentSession, document);
         const record = { ...metrics, path, parentSession };
         pi.appendEntry(METRICS, record);
@@ -101,11 +119,18 @@ export function createHandoffExtension({ readConfig = ctx => loadConfig(ctx, CON
         const switched = await ctx.newSession({
           parentSession,
           setup: async sm => {
+            if (modelSelection) sm.appendModelChange(modelSelection.provider, modelSelection.id);
+            sm.appendThinkingLevelChange(thinkingLevel);
             sm.appendCustomMessageEntry('handoff', wrapHandoffContext(document), true);
             sm.appendCustomEntry(METRICS, record);
             if (metrics.usage) sm.appendUsage('handoff', metrics.provider, metrics.model, metrics.usage, 'Handoff generation from parent session');
           },
           withSession: async replacement => {
+            // Event-handler errors are reported by Pi rather than propagated.
+            // Never start work with defaults if restoration failed.
+            if ((modelSelection && (replacement.model?.provider !== modelSelection.provider || replacement.model?.id !== modelSelection.id)) || replacement.thinkingLevel !== thinkingLevel) {
+              throw new Error('Handoff model settings were not restored; continuation stopped');
+            }
             if (replacement.hasUI) replacement.ui.notify(`Handoff ready in ${(metrics.elapsedMs / 1000).toFixed(1)}s${path ? `; saved: ${path}` : ''}. Continuing.`, 'info');
             // Never use captured old pi/ctx after runtime replacement.
             await replacement.sendUserMessage(goal ? `${KICKOFF}\n\nAdditional focus: ${goal}` : KICKOFF);

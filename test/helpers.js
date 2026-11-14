@@ -15,10 +15,10 @@ export async function harness(t, { handler, config = {}, generate, save, initial
   const requests = [], errors = [], notices = [], events = [];
   modelRuntime.registerProvider('fake', {
     api: 'openai-completions', baseUrl: 'https://invalid.example', apiKey: 'offline-test',
-    models: [{ id: 'test', name: 'test', reasoning: true, input: ['text'], contextWindow: 100000, maxTokens: 16384, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+    models: ['test', 'other'].map(id => ({ id, name: id, reasoning: true, input: ['text'], contextWindow: 100000, maxTokens: 16384, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } })),
     streamSimple(model, context, options) {
       const stream = new AssistantMessageEventStream();
-      const request = { context: structuredClone(context), options, summary: JSON.stringify(context.messages.at(-1)).includes('Write a handoff document') };
+      const request = { model: model.id, context: structuredClone(context), options, summary: JSON.stringify(context.messages.at(-1)).includes('Write a handoff document') };
       requests.push(request);
       void (async () => {
         const message = { role: 'assistant', api: model.api, provider: 'fake', model: 'test', timestamp: Date.now(), content: [], stopReason: 'pending',

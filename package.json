@@ -1,6 +1,6 @@
 {
   "name": "pi-yet-another-handoff",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Confirmation-free Pi session handoff with a customizable handoff template",
   "type": "module",
   "license": "MIT",
